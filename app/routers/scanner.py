@@ -70,22 +70,42 @@ def find_matching_candidato(
     return None
 
 
+def parse_confianza(val) -> float:
+    try:
+        if val is None:
+            return 0.0
+        if isinstance(val, str):
+            val = val.replace("%", "").strip()
+        f = float(val)
+        if f > 1.0:
+            f = f / 100.0
+        return f
+    except Exception:
+        return 0.0
+
 @router.post("/", response_model=CandidatoRead)
 async def escanear_documento(
     db: SupabaseDep,
     file: UploadFile,
     user: UserResponse = Depends(require_permission("escanear")),
 ):
-    if file.content_type not in ALLOWED_TYPES:
-        ext = file.filename.split(".")[-1] if file.filename else "unknown"
-        if f".{ext}" not in ALLOWED_TYPES.values():
+    content_type = file.content_type.lower() if file.content_type else ""
+    # Navegadores a veces envían image/jpg en vez de image/jpeg
+    if content_type == "image/jpg":
+        content_type = "image/jpeg"
+        
+    if content_type not in ALLOWED_TYPES:
+        ext = file.filename.lower().split(".")[-1] if file.filename else "unknown"
+        valid_ext = f".{ext}"
+        if valid_ext not in ALLOWED_TYPES.values():
             raise HTTPException(
                 status_code=422,
                 detail=f"Tipo de archivo no permitido: {file.content_type}. "
                        "Use PDF, JPG, PNG o WEBP.",
             )
-
-    suffix = ALLOWED_TYPES.get(file.content_type, ".pdf")
+        suffix = valid_ext
+    else:
+        suffix = ALLOWED_TYPES.get(content_type, ".pdf")
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         content = await file.read()
@@ -98,6 +118,7 @@ async def escanear_documento(
         datos = extracted_data.get("datos", {})
         primer_nombre = extracted_data.get("primer_nombre", "")
         primer_apellido = extracted_data.get("primer_apellido", "")
+        confianza_val = parse_confianza(extracted_data.get("tipo_confianza"))
 
         if tipo_documento == "CEDULA":
             file_url = upload_file(tmp_path, folder="cedulas")
@@ -147,7 +168,7 @@ async def escanear_documento(
                     "educacion": datos.get("educacion"),
                     "resumen": datos.get("resumen"),
                     "archivo_url": file_url,
-                    "confianza": extracted_data.get("tipo_confianza"),
+                    "confianza": confianza_val,
                     "datos_crudos": {
                         **(existing.get("datos_crudos") or {}),
                         "cv_datos": extracted_data,
@@ -171,7 +192,7 @@ async def escanear_documento(
                     "resumen": datos.get("resumen"),
                     "archivo_url": file_url,
                     "datos_crudos": extracted_data,
-                    "confianza": extracted_data.get("tipo_confianza"),
+                    "confianza": confianza_val,
                 }
                 result = db.table(TABLE).insert(candidato_data).execute()
                 return result.data[0]
