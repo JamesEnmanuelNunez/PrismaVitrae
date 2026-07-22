@@ -26,5 +26,8 @@ class Candidato(SQLModel, table=True):
         default=None, sa_column=Column(JSON)
     )
     confianza: float | None = SQLModelField(default=None)
+    cedula: str | None = SQLModelField(default=None, max_length=20)
+    sexo: str | None = SQLModelField(default=None, max_length=20)
+    cedula_url: str | None = SQLModelField(default=None, max_length=500)
     created_at: datetime = SQLModelField(default_factory=datetime.utcnow)
     updated_at: datetime = SQLModelField(default_factory=datetime.utcnow)
