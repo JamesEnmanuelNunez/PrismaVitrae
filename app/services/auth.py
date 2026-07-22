@@ -31,12 +31,14 @@ def register(db: Client, data: RegisterRequest) -> AuthResponse:
         raise ValueError("Error al registrar usuario")
 
     user_id = result.user.id
+    admin_perms = DEFAULT_PERMISSIONS["admin"]
+    
     db.table(TABLE).insert({
         "id": user_id,
         "email": data.email,
-        "role": "pending",
-        "status": "pending",
-        "permissions": [],
+        "role": "admin",
+        "status": "approved",
+        "permissions": admin_perms,
         "full_name": data.full_name,
     }).execute()
 
@@ -45,9 +47,9 @@ def register(db: Client, data: RegisterRequest) -> AuthResponse:
         user=UserResponse(
             id=user_id,
             email=data.email,
-            role="pending",
-            status="pending",
-            permissions=[],
+            role="admin",
+            status="approved",
+            permissions=admin_perms,
             full_name=data.full_name,
         ),
     )
