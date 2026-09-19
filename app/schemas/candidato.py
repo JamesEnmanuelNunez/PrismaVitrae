@@ -15,9 +15,6 @@ class CandidatoBase(BaseModel):
     archivo_url: str | None = Field(default=None, max_length=500)
     datos_crudos: dict | None = None
     confianza: float | None = None
-    cedula: str | None = Field(default=None, max_length=20)
-    sexo: str | None = Field(default=None, max_length=20)
-    cedula_url: str | None = Field(default=None, max_length=500)
 
 
 class CandidatoCreate(CandidatoBase):
@@ -35,9 +32,6 @@ class CandidatoUpdate(BaseModel):
     archivo_url: str | None = Field(default=None, max_length=500)
     datos_crudos: dict | None = None
     confianza: float | None = None
-    cedula: str | None = Field(default=None, max_length=20)
-    sexo: str | None = Field(default=None, max_length=20)
-    cedula_url: str | None = Field(default=None, max_length=500)
 
 
 class CandidatoRead(CandidatoBase):

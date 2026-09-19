@@ -1,9 +1,9 @@
 import io
+from collections.abc import Callable
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
-
 
 HEADER_FONT = Font(name="Cambria", size=14, bold=True, color="000000")
 HEADER_FILL = PatternFill(start_color="00B0F0", end_color="00B0F0", fill_type="solid")
@@ -17,12 +17,16 @@ def _add_title_rows(ws, title: str, subtitle: str, max_col: int) -> int:
     subtitle_row = 2
     header_row = 3
 
-    ws.merge_cells(start_row=title_row, start_column=1, end_row=title_row, end_column=max_col)
+    ws.merge_cells(
+        start_row=title_row, start_column=1, end_row=title_row, end_column=max_col
+    )
     cell = ws.cell(row=title_row, column=1, value=title)
     cell.font = TITLE_FONT
     cell.alignment = Alignment(horizontal="center", vertical="center")
 
-    ws.merge_cells(start_row=subtitle_row, start_column=1, end_row=subtitle_row, end_column=max_col)
+    ws.merge_cells(
+        start_row=subtitle_row, start_column=1, end_row=subtitle_row, end_column=max_col
+    )
     cell = ws.cell(row=subtitle_row, column=1, value=subtitle)
     cell.font = SUBTITLE_FONT
     cell.alignment = Alignment(horizontal="center", vertical="center")
@@ -56,34 +60,30 @@ def _get(d, key, default=""):
     return val if val is not None else default
 
 
-def generate_candidatos_excel(candidatos: list[dict]) -> io.BytesIO:
+def _date(value):
+    return value.strftime("%Y-%m-%d") if hasattr(value, "strftime") else value
+
+
+def _generate_sheet(
+    *,
+    sheet_title: str,
+    subtitle: str,
+    headers: list[str],
+    rows: list[dict],
+    row_builder: Callable[[dict], list],
+) -> io.BytesIO:
     wb = Workbook()
     ws = wb.active
-    ws.title = "Candidatos"
+    ws.title = sheet_title
 
-    headers = [
-        "No.", "Reg/Dist", "Cédula", "Nombre Completo", "Sexo",
-        "Cargo Solicitado", "Escolaridad", "En Sustitución De",
-        "Cédula No.", "Fecha Ingreso", "Centro", "Referido Por", "Teléfono",
-    ]
-    header_row = _add_title_rows(ws, "DIRECCIÓN DE RECURSOS HUMANOS", "CANDIDATOS", len(headers))
+    header_row = _add_title_rows(
+        ws, "DIRECCIÓN DE RECURSOS HUMANOS", subtitle, len(headers)
+    )
     _style_header(ws, headers, header_row)
 
-    for row_idx, c in enumerate(candidatos, header_row + 1):
-        dc = c.get("datos_crudos", {}) or {}
-        ws.cell(row=row_idx, column=1, value=dc.get("no", ""))
-        ws.cell(row=row_idx, column=2, value=dc.get("reg_dist", ""))
-        ws.cell(row=row_idx, column=3, value=dc.get("cedula", ""))
-        ws.cell(row=row_idx, column=4, value=_get(c, "nombre"))
-        ws.cell(row=row_idx, column=5, value=dc.get("sexo", ""))
-        ws.cell(row=row_idx, column=6, value=dc.get("cargo_solicitado", ""))
-        ws.cell(row=row_idx, column=7, value=dc.get("escolaridad", "") or _get(c, "educacion"))
-        ws.cell(row=row_idx, column=8, value=dc.get("en_sustitucion_de", ""))
-        ws.cell(row=row_idx, column=9, value=dc.get("cedula_no", ""))
-        ws.cell(row=row_idx, column=10, value=dc.get("fecha_ingreso", ""))
-        ws.cell(row=row_idx, column=11, value=dc.get("centro", ""))
-        ws.cell(row=row_idx, column=12, value=dc.get("referido_por", ""))
-        ws.cell(row=row_idx, column=13, value=_get(c, "telefono"))
+    for row_idx, item in enumerate(rows, header_row + 1):
+        for col_idx, value in enumerate(row_builder(item), 1):
+            ws.cell(row=row_idx, column=col_idx, value=value)
 
     _auto_width(ws)
 
@@ -91,112 +91,132 @@ def generate_candidatos_excel(candidatos: list[dict]) -> io.BytesIO:
     wb.save(output)
     output.seek(0)
     return output
+
+
+CANDIDATOS_HEADERS = [
+    "No.", "Reg/Dist", "Cédula", "Nombre Completo", "Sexo",
+    "Cargo Solicitado", "Escolaridad", "En Sustitución De",
+    "Cédula No.", "Fecha Ingreso", "Centro", "Referido Por", "Teléfono",
+]
+
+PROPUESTAS_HEADERS = CANDIDATOS_HEADERS
+
+REAJUSTES_HEADERS = [
+    "Cédula", "Nombre Completo", "Grupo Ocupacional", "Cargo",
+    "Salario Actual", "Salario Solicitado", "Diferencia",
+    "% Incremento", "Observación", "Fecha Efectividad",
+]
+
+NO_PROCEDEN_HEADERS = [
+    "No.", "Reg/Dist", "Cédula", "Nombre Completo", "Sexo",
+    "Cargo Solicitado", "Salario Solicitado", "Escolaridad",
+    "Observación", "Referido Por", "Teléfono",
+]
+
+
+def _candidato_row(c: dict) -> list:
+    dc = c.get("datos_crudos", {}) or {}
+    return [
+        dc.get("no", ""),
+        dc.get("reg_dist", ""),
+        dc.get("cedula", ""),
+        _get(c, "nombre"),
+        dc.get("sexo", ""),
+        dc.get("cargo_solicitado", ""),
+        dc.get("escolaridad", "") or _get(c, "educacion"),
+        dc.get("en_sustitucion_de", ""),
+        dc.get("cedula_no", ""),
+        dc.get("fecha_ingreso", ""),
+        dc.get("centro", ""),
+        dc.get("referido_por", ""),
+        _get(c, "telefono"),
+    ]
+
+
+def _propuesta_row(p: dict) -> list:
+    return [
+        _get(p, "no"),
+        _get(p, "reg_dist"),
+        _get(p, "cedula"),
+        _get(p, "nombre_completo"),
+        _get(p, "sexo"),
+        _get(p, "cargo_solicitado"),
+        _get(p, "escolaridad"),
+        _get(p, "en_sustitucion_de"),
+        _get(p, "cedula_no"),
+        _date(_get(p, "fecha_ingreso", "")),
+        _get(p, "centro"),
+        _get(p, "referido_por"),
+        _get(p, "telefono"),
+    ]
+
+
+def _reajuste_row(r: dict) -> list:
+    return [
+        _get(r, "cedula"),
+        _get(r, "nombre_completo"),
+        _get(r, "grupo_ocupacional"),
+        _get(r, "cargo"),
+        _get(r, "salario_actual", 0),
+        _get(r, "salario_solicitado", 0),
+        _get(r, "diferencia_salarial", 0),
+        _get(r, "porcentaje_incremento", 0),
+        _get(r, "observacion"),
+        _date(_get(r, "fecha_efectividad", "")),
+    ]
+
+
+def _no_procede_row(np: dict) -> list:
+    return [
+        _get(np, "no"),
+        _get(np, "reg_dist"),
+        _get(np, "cedula"),
+        _get(np, "nombre_completo"),
+        _get(np, "sexo"),
+        _get(np, "cargo_solicitado"),
+        _get(np, "salario_solicitado", 0),
+        _get(np, "escolaridad"),
+        _get(np, "observacion"),
+        _get(np, "referido_por"),
+        _get(np, "telefono"),
+    ]
+
+
+def generate_candidatos_excel(candidatos: list[dict]) -> io.BytesIO:
+    return _generate_sheet(
+        sheet_title="Candidatos",
+        subtitle="CANDIDATOS",
+        headers=CANDIDATOS_HEADERS,
+        rows=candidatos,
+        row_builder=_candidato_row,
+    )
 
 
 def generate_propuestas_excel(propuestas: list[dict]) -> io.BytesIO:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Propuestas"
-
-    headers = [
-        "No.", "Reg/Dist", "Cédula", "Nombre Completo", "Sexo",
-        "Cargo Solicitado", "Escolaridad", "En Sustitución De",
-        "Cédula No.", "Fecha Ingreso", "Centro", "Referido Por", "Teléfono",
-    ]
-    header_row = _add_title_rows(ws, "DIRECCIÓN DE RECURSOS HUMANOS", "PROPUESTAS REGIONAL 2025", len(headers))
-    _style_header(ws, headers, header_row)
-
-    for row_idx, p in enumerate(propuestas, header_row + 1):
-        ws.cell(row=row_idx, column=1, value=_get(p, "no"))
-        ws.cell(row=row_idx, column=2, value=_get(p, "reg_dist"))
-        ws.cell(row=row_idx, column=3, value=_get(p, "cedula"))
-        ws.cell(row=row_idx, column=4, value=_get(p, "nombre_completo"))
-        ws.cell(row=row_idx, column=5, value=_get(p, "sexo"))
-        ws.cell(row=row_idx, column=6, value=_get(p, "cargo_solicitado"))
-        ws.cell(row=row_idx, column=7, value=_get(p, "escolaridad"))
-        ws.cell(row=row_idx, column=8, value=_get(p, "en_sustitucion_de"))
-        ws.cell(row=row_idx, column=9, value=_get(p, "cedula_no"))
-        fecha = _get(p, "fecha_ingreso", "")
-        if hasattr(fecha, "strftime"):
-            fecha = fecha.strftime("%Y-%m-%d")
-        ws.cell(row=row_idx, column=10, value=fecha)
-        ws.cell(row=row_idx, column=11, value=_get(p, "centro"))
-        ws.cell(row=row_idx, column=12, value=_get(p, "referido_por"))
-        ws.cell(row=row_idx, column=13, value=_get(p, "telefono"))
-
-    _auto_width(ws)
-
-    output = io.BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output
+    return _generate_sheet(
+        sheet_title="Propuestas",
+        subtitle="PROPUESTAS REGIONAL 2025",
+        headers=PROPUESTAS_HEADERS,
+        rows=propuestas,
+        row_builder=_propuesta_row,
+    )
 
 
 def generate_reajustes_excel(reajustes: list[dict]) -> io.BytesIO:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Reajustes"
-
-    headers = [
-        "Cédula", "Nombre Completo", "Grupo Ocupacional", "Cargo",
-        "Salario Actual", "Salario Solicitado", "Diferencia",
-        "% Incremento", "Observación", "Fecha Efectividad",
-    ]
-    header_row = _add_title_rows(ws, "DIRECCIÓN DE RECURSOS HUMANOS", "REAJUSTE SALARIAL", len(headers))
-    _style_header(ws, headers, header_row)
-
-    for row_idx, r in enumerate(reajustes, header_row + 1):
-        ws.cell(row=row_idx, column=1, value=_get(r, "cedula"))
-        ws.cell(row=row_idx, column=2, value=_get(r, "nombre_completo"))
-        ws.cell(row=row_idx, column=3, value=_get(r, "grupo_ocupacional"))
-        ws.cell(row=row_idx, column=4, value=_get(r, "cargo"))
-        ws.cell(row=row_idx, column=5, value=_get(r, "salario_actual", 0))
-        ws.cell(row=row_idx, column=6, value=_get(r, "salario_solicitado", 0))
-        ws.cell(row=row_idx, column=7, value=_get(r, "diferencia_salarial", 0))
-        ws.cell(row=row_idx, column=8, value=_get(r, "porcentaje_incremento", 0))
-        ws.cell(row=row_idx, column=9, value=_get(r, "observacion"))
-        fecha = _get(r, "fecha_efectividad", "")
-        if hasattr(fecha, "strftime"):
-            fecha = fecha.strftime("%Y-%m-%d")
-        ws.cell(row=row_idx, column=10, value=fecha)
-
-    _auto_width(ws)
-
-    output = io.BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output
+    return _generate_sheet(
+        sheet_title="Reajustes",
+        subtitle="REAJUSTE SALARIAL",
+        headers=REAJUSTES_HEADERS,
+        rows=reajustes,
+        row_builder=_reajuste_row,
+    )
 
 
 def generate_no_proceden_excel(no_proceden: list[dict]) -> io.BytesIO:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "No Proceden"
-
-    headers = [
-        "No.", "Reg/Dist", "Cédula", "Nombre Completo", "Sexo",
-        "Cargo Solicitado", "Salario Solicitado", "Escolaridad",
-        "Observación", "Referido Por", "Teléfono",
-    ]
-    header_row = _add_title_rows(ws, "DIRECCIÓN DE RECURSOS HUMANOS", "NO PROCEDEN 2025", len(headers))
-    _style_header(ws, headers, header_row)
-
-    for row_idx, np in enumerate(no_proceden, header_row + 1):
-        ws.cell(row=row_idx, column=1, value=_get(np, "no"))
-        ws.cell(row=row_idx, column=2, value=_get(np, "reg_dist"))
-        ws.cell(row=row_idx, column=3, value=_get(np, "cedula"))
-        ws.cell(row=row_idx, column=4, value=_get(np, "nombre_completo"))
-        ws.cell(row=row_idx, column=5, value=_get(np, "sexo"))
-        ws.cell(row=row_idx, column=6, value=_get(np, "cargo_solicitado"))
-        ws.cell(row=row_idx, column=7, value=_get(np, "salario_solicitado", 0))
-        ws.cell(row=row_idx, column=8, value=_get(np, "escolaridad"))
-        ws.cell(row=row_idx, column=9, value=_get(np, "observacion"))
-        ws.cell(row=row_idx, column=10, value=_get(np, "referido_por"))
-        ws.cell(row=row_idx, column=11, value=_get(np, "telefono"))
-
-    _auto_width(ws)
-
-    output = io.BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output
+    return _generate_sheet(
+        sheet_title="No Proceden",
+        subtitle="NO PROCEDEN 2025",
+        headers=NO_PROCEDEN_HEADERS,
+        rows=no_proceden,
+        row_builder=_no_procede_row,
+    )

@@ -12,12 +12,6 @@ class LoginRequest(BaseModel):
     password: str
 
 
-class AuthResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    user: "UserResponse"
-
-
 class UserResponse(BaseModel):
     id: str
     email: str
@@ -27,9 +21,19 @@ class UserResponse(BaseModel):
     full_name: str | None = None
 
 
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+
+
 class UpdateRoleRequest(BaseModel):
     user_id: str
     role: str
+
+
+class RejectUserRequest(BaseModel):
+    user_id: str
 
 
 class UpdatePermissionsRequest(BaseModel):

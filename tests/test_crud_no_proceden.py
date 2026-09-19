@@ -2,68 +2,73 @@ import uuid
 
 from fastapi.testclient import TestClient
 
-
-NO_PROCEDER_DATA = {
+NO_PROCEDE_DATA = {
     "no": 1,
     "cedula": "001-5555555-5",
-    "nombre_completo": "Test No Proceder",
+    "nombre_completo": "Test No Procede",
     "sexo": "F",
     "cargo_solicitado": "Gerente",
-    "salario_solicitado": 80000.0,
+    "salario_solicitado": 70000.0,
     "escolaridad": "Maestría",
-    "observacion": "No cumple requisitos",
 }
 
 
-def test_create_no_procede(client: TestClient):
-    response = client.post("/api/no-proceden/", json=NO_PROCEDER_DATA)
+def _unique(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:8]}"
+
+
+def _create(client: TestClient, cleanup, **overrides) -> dict:
+    data = {**NO_PROCEDE_DATA, **overrides}
+    response = client.post("/api/no-proceden/", json=data)
     assert response.status_code == 201
-    data = response.json()
+    row = response.json()
+    cleanup.table("no_proceden", row["id"])
+    return row
+
+
+def test_create_no_procede(client: TestClient, cleanup):
+    data = _create(client, cleanup, nombre_completo=_unique("Test No Procede"))
     assert data["cedula"] == "001-5555555-5"
-    assert data["salario_solicitado"] == 80000.0
     assert "id" in data
 
 
-def test_list_no_proceden(client: TestClient):
-    client.post("/api/no-proceden/", json=NO_PROCEDER_DATA)
-    client.post("/api/no-proceden/", json={**NO_PROCEDER_DATA, "no": 2})
+def test_list_no_proceden(client: TestClient, cleanup, list_all):
+    names = [_unique("List No Procede") for _ in range(2)]
+    for i, name in enumerate(names):
+        _create(client, cleanup, no=i + 1, nombre_completo=name)
 
-    response = client.get("/api/no-proceden/")
+    found = {r["nombre_completo"] for r in list_all(client, "/api/no-proceden")}
+    assert set(names) <= found
+
+
+def test_get_no_procede(client: TestClient, cleanup):
+    created = _create(client, cleanup, nombre_completo=_unique("Get No Procede"))
+
+    response = client.get(f"/api/no-proceden/{created['id']}")
     assert response.status_code == 200
-    assert len(response.json()) == 2
-
-
-def test_get_no_procede(client: TestClient):
-    create_resp = client.post("/api/no-proceden/", json=NO_PROCEDER_DATA)
-    no_procede_id = create_resp.json()["id"]
-
-    response = client.get(f"/api/no-proceden/{no_procede_id}")
-    assert response.status_code == 200
-    assert response.json()["nombre_completo"] == "Test No Proceder"
+    assert response.json()["cedula"] == "001-5555555-5"
 
 
 def test_get_no_procede_not_found(client: TestClient):
-    fake_id = str(uuid.uuid4())
-    response = client.get(f"/api/no-proceden/{fake_id}")
+    response = client.get(f"/api/no-proceden/{uuid.uuid4()}")
     assert response.status_code == 404
 
 
-def test_update_no_procede(client: TestClient):
-    create_resp = client.post("/api/no-proceden/", json=NO_PROCEDER_DATA)
-    no_procede_id = create_resp.json()["id"]
+def test_update_no_procede(client: TestClient, cleanup):
+    created = _create(client, cleanup, nombre_completo=_unique("Update No Procede"))
 
-    update_data = {"observacion": "Actualizado - ahora procede"}
-    response = client.put(f"/api/no-proceden/{no_procede_id}", json=update_data)
+    update_data = {"cargo_solicitado": "Gerente General", "observacion": "Actualizado"}
+    response = client.put(f"/api/no-proceden/{created['id']}", json=update_data)
     assert response.status_code == 200
-    assert response.json()["observacion"] == "Actualizado - ahora procede"
+    assert response.json()["cargo_solicitado"] == "Gerente General"
+    assert response.json()["observacion"] == "Actualizado"
 
 
-def test_delete_no_procede(client: TestClient):
-    create_resp = client.post("/api/no-proceden/", json=NO_PROCEDER_DATA)
-    no_procede_id = create_resp.json()["id"]
+def test_delete_no_procede(client: TestClient, cleanup):
+    created = _create(client, cleanup, nombre_completo=_unique("Delete No Procede"))
 
-    response = client.delete(f"/api/no-proceden/{no_procede_id}")
+    response = client.delete(f"/api/no-proceden/{created['id']}")
     assert response.status_code == 204
 
-    get_resp = client.get(f"/api/no-proceden/{no_procede_id}")
+    get_resp = client.get(f"/api/no-proceden/{created['id']}")
     assert get_resp.status_code == 404

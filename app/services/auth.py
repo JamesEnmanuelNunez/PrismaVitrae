@@ -1,5 +1,6 @@
 from supabase import Client
 
+from app.exceptions import AuthError, PrismaVitaeError
 from app.schemas.auth import (
     AuthResponse,
     LoginRequest,
@@ -25,46 +26,46 @@ DEFAULT_PERMISSIONS = {
 }
 
 
-def register(db: Client, data: RegisterRequest) -> AuthResponse:
+def register(db: Client, data: RegisterRequest) -> UserResponse:
     result = db.auth.sign_up({"email": data.email, "password": data.password})
     if result.user is None:
-        raise ValueError("Error al registrar usuario")
+        raise PrismaVitaeError("Error al registrar usuario")
 
     user_id = result.user.id
-    admin_perms = DEFAULT_PERMISSIONS["admin"]
-    
+    role = "user"
+    permissions = DEFAULT_PERMISSIONS[role]
+
     db.table(TABLE).insert({
         "id": user_id,
         "email": data.email,
-        "role": "admin",
-        "status": "approved",
-        "permissions": admin_perms,
+        "role": role,
+        "status": "pending",
+        "permissions": permissions,
         "full_name": data.full_name,
     }).execute()
 
-    return AuthResponse(
-        access_token=result.session.access_token,
-        user=UserResponse(
-            id=user_id,
-            email=data.email,
-            role="admin",
-            status="approved",
-            permissions=admin_perms,
-            full_name=data.full_name,
-        ),
+    return UserResponse(
+        id=user_id,
+        email=data.email,
+        role=role,
+        status="pending",
+        permissions=permissions,
+        full_name=data.full_name,
     )
 
 
 def login(db: Client, data: LoginRequest) -> AuthResponse:
-    result = db.auth.sign_in_with_password({"email": data.email, "password": data.password})
+    result = db.auth.sign_in_with_password(
+        {"email": data.email, "password": data.password}
+    )
     if result.user is None:
-        raise ValueError("Credenciales inválidas")
+        raise AuthError("Credenciales inválidas")
 
     user_id = result.user.id
     profile = db.table(TABLE).select("*").eq("id", user_id).single().execute()
 
     if profile.data["status"] != "approved":
-        raise ValueError("Tu cuenta está pendiente de aprobación por un administrador")
+        raise AuthError("Tu cuenta está pendiente de aprobación por un administrador")
 
     return AuthResponse(
         access_token=result.session.access_token,
@@ -82,10 +83,13 @@ def login(db: Client, data: LoginRequest) -> AuthResponse:
 def get_current_user(db: Client, token: str) -> UserResponse:
     result = db.auth.get_user(token)
     if result.user is None:
-        raise ValueError("Token inválido")
+        raise AuthError("Token inválido")
 
     user_id = result.user.id
     profile = db.table(TABLE).select("*").eq("id", user_id).single().execute()
+
+    if profile.data["status"] != "approved":
+        raise AuthError("Tu cuenta está pendiente de aprobación por un administrador")
 
     return UserResponse(
         id=user_id,
@@ -97,9 +101,11 @@ def get_current_user(db: Client, token: str) -> UserResponse:
     )
 
 
-def approve_user(db: Client, user_id: str, role: str, permissions: list[str] | None = None) -> dict:
+def approve_user(
+    db: Client, user_id: str, role: str, permissions: list[str] | None = None
+) -> dict:
     if role not in DEFAULT_PERMISSIONS:
-        raise ValueError(f"Rol inválido: {role}")
+        raise PrismaVitaeError(f"Rol inválido: {role}")
 
     final_permissions = permissions if permissions else DEFAULT_PERMISSIONS[role]
     db.table(TABLE).update({
@@ -107,7 +113,12 @@ def approve_user(db: Client, user_id: str, role: str, permissions: list[str] | N
         "status": "approved",
         "permissions": final_permissions,
     }).eq("id", user_id).execute()
-    return {"user_id": user_id, "role": role, "status": "approved", "permissions": final_permissions}
+    return {
+        "user_id": user_id,
+        "role": role,
+        "status": "approved",
+        "permissions": final_permissions,
+    }
 
 
 def reject_user(db: Client, user_id: str) -> dict:
@@ -124,10 +135,13 @@ def list_pending_users(db: Client) -> list[dict]:
 
 def update_role(db: Client, user_id: str, role: str) -> dict:
     if role not in DEFAULT_PERMISSIONS:
-        raise ValueError(f"Rol inválido: {role}")
+        raise PrismaVitaeError(f"Rol inválido: {role}")
 
     permissions = DEFAULT_PERMISSIONS[role]
-    db.table(TABLE).update({"role": role, "permissions": permissions}).eq("id", user_id).execute()
+    db.table(TABLE).update({
+        "role": role,
+        "permissions": permissions,
+    }).eq("id", user_id).execute()
     return {"user_id": user_id, "role": role, "permissions": permissions}
 
 

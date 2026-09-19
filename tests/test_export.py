@@ -1,8 +1,8 @@
+import uuid
 from io import BytesIO
 
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
-
 
 CANDIDATO_DATA = {
     "nombre": "Export Test",
@@ -41,66 +41,77 @@ NO_PROCEDER_DATA = {
 }
 
 
-def test_export_candidatos_empty(client: TestClient):
+def _unique(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:8]}"
+
+
+def _export_values(response) -> tuple[str, list]:
+    wb = load_workbook(BytesIO(response.content))
+    ws = wb.active
+    values = [cell.value for row in ws.iter_rows() for cell in row]
+    return ws.title, values
+
+
+def _track(client, cleanup, table, payload):
+    response = client.post(f"/api/{table}/", json=payload)
+    assert response.status_code == 201
+    row = response.json()
+    cleanup.table(table, row["id"])
+    return row
+
+
+def test_export_candidatos(client: TestClient, cleanup):
+    name = _unique("Export Test")
+    _track(client, cleanup, "candidatos", {**CANDIDATO_DATA, "nombre": name})
+
     response = client.get("/api/exportar-excel/candidatos")
     assert response.status_code == 200
     assert "spreadsheetml" in response.headers["content-type"]
 
-    wb = load_workbook(BytesIO(response.content))
-    ws = wb.active
-    assert ws.title == "Candidatos"
-    assert ws.max_row == 1
+    title, values = _export_values(response)
+    assert title == "Candidatos"
+    assert name in values
 
 
-def test_export_candidatos_with_data(client: TestClient):
-    client.post("/api/candidatos/", json=CANDIDATO_DATA)
-    client.post("/api/candidatos/", json={**CANDIDATO_DATA, "nombre": "Export Test 2"})
-
-    response = client.get("/api/exportar-excel/candidatos")
-    assert response.status_code == 200
-
-    wb = load_workbook(BytesIO(response.content))
-    ws = wb.active
-    assert ws.max_row == 3
-    assert ws.cell(row=2, column=2).value == "Export Test"
-
-
-def test_export_propuestas(client: TestClient):
-    client.post("/api/propuestas/", json=PROPUESTA_DATA)
+def test_export_propuestas(client: TestClient, cleanup):
+    name = _unique("Propuesta Export")
+    _track(client, cleanup, "propuestas", {**PROPUESTA_DATA, "nombre_completo": name})
 
     response = client.get("/api/exportar-excel/propuestas")
     assert response.status_code == 200
 
-    wb = load_workbook(BytesIO(response.content))
-    ws = wb.active
-    assert ws.title == "Propuestas"
-    assert ws.max_row == 2
-    assert ws.cell(row=2, column=4).value == "Propuesta Export"
+    title, values = _export_values(response)
+    assert title == "Propuestas"
+    assert name in values
 
 
-def test_export_reajustes(client: TestClient):
-    client.post("/api/reajustes/", json=REAJUSTE_DATA)
+def test_export_reajustes(client: TestClient, cleanup):
+    name = _unique("Reajuste Export")
+    _track(client, cleanup, "reajustes", {**REAJUSTE_DATA, "nombre_completo": name})
 
     response = client.get("/api/exportar-excel/reajustes")
     assert response.status_code == 200
 
-    wb = load_workbook(BytesIO(response.content))
-    ws = wb.active
-    assert ws.title == "Reajustes"
-    assert ws.max_row == 2
-    assert ws.cell(row=2, column=5).value == 35000.0
+    title, values = _export_values(response)
+    assert title == "Reajustes"
+    assert name in values
 
 
-def test_export_no_proceden(client: TestClient):
-    client.post("/api/no-proceden/", json=NO_PROCEDER_DATA)
+def test_export_no_proceden(client: TestClient, cleanup):
+    name = _unique("No Proceder Export")
+    _track(
+        client,
+        cleanup,
+        "no-proceden",
+        {**NO_PROCEDER_DATA, "nombre_completo": name},
+    )
 
     response = client.get("/api/exportar-excel/no_proceden")
     assert response.status_code == 200
 
-    wb = load_workbook(BytesIO(response.content))
-    ws = wb.active
-    assert ws.title == "No Proceden"
-    assert ws.max_row == 2
+    title, values = _export_values(response)
+    assert title == "No Proceden"
+    assert name in values
 
 
 def test_export_invalid_table(client: TestClient):

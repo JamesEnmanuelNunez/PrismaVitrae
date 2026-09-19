@@ -1,18 +1,22 @@
 -- ============================================
 -- PrismaVitae - Schema de Base de Datos
 -- Supabase (PostgreSQL)
+-- Ejecutar desde el SQL Editor de Supabase.
 -- ============================================
 
--- Tabla de Candidatos (CVs escaneados con IA)
+-- ============================================
+-- Tabla de Candidatos (CVs y Cédulas escaneados con IA)
+-- Permite fusión: un candidato puede tener datos de CV y de cédula
+-- ============================================
 CREATE TABLE IF NOT EXISTS candidatos (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  nombre VARCHAR(255) NOT NULL,
+  nombre VARCHAR(255),
   telefono VARCHAR(50),
   email VARCHAR(255),
   habilidades JSONB DEFAULT '[]',
   experiencia_anios FLOAT,
   educacion VARCHAR(500),
-  resumen VARCHAR(2000),
+  resumen TEXT,
   archivo_url VARCHAR(500),
   datos_crudos JSONB,
   confianza FLOAT,
@@ -91,6 +95,13 @@ CREATE TABLE IF NOT EXISTS user_profiles (
 );
 
 -- ============================================
+-- Storage: bucket "cvs" (público) para CVs y cédulas
+-- ============================================
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('cvs', 'cvs', true)
+ON CONFLICT (id) DO NOTHING;
+
+-- ============================================
 -- Habilitar RLS (Row Level Security)
 -- ============================================
 ALTER TABLE candidatos ENABLE ROW LEVEL SECURITY;
@@ -101,7 +112,8 @@ ALTER TABLE user_profiles ENABLE ROW LEVEL SECURITY;
 
 -- ============================================
 -- Políticas de acceso (desarrollo)
--- Permitir todas las operaciones para usuarios anónimos
+-- Permitir todas las operaciones para usuarios anónimos.
+-- La autorización real se delega a la capa FastAPI.
 -- ============================================
 DROP POLICY IF EXISTS "Allow all for candidatos" ON candidatos;
 DROP POLICY IF EXISTS "Allow all for propuestas" ON propuestas;
@@ -126,6 +138,7 @@ CREATE POLICY "Service role can manage all profiles" ON user_profiles FOR ALL US
 -- Índices para mejorar rendimiento
 -- ============================================
 CREATE INDEX IF NOT EXISTS idx_candidatos_email ON candidatos(email);
+CREATE INDEX IF NOT EXISTS idx_candidatos_nombre ON candidatos(nombre);
 CREATE INDEX IF NOT EXISTS idx_propuestas_cedula ON propuestas(cedula);
 CREATE INDEX IF NOT EXISTS idx_reajustes_cedula ON reajustes(cedula);
 CREATE INDEX IF NOT EXISTS idx_no_proceden_cedula ON no_proceden(cedula);

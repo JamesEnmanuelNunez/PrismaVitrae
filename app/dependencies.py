@@ -1,9 +1,10 @@
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header
 from supabase import Client, create_client
 
 from app.config import settings
+from app.exceptions import AuthError, ForbiddenError
 from app.schemas.auth import UserResponse
 from app.services.auth import get_current_user
 
@@ -25,7 +26,7 @@ SupabaseDep = Annotated[Client, Depends(get_supabase)]
 
 def get_token(authorization: str = Header(...)) -> str:
     if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Token inválido")
+        raise AuthError("Token inválido")
     return authorization.replace("Bearer ", "")
 
 
@@ -38,26 +39,18 @@ def get_current_user_dep(
 ) -> UserResponse:
     try:
         return get_current_user(db, token)
-    except Exception:
-        raise HTTPException(status_code=401, detail="No autorizado")
+    except AuthError:
+        raise
+    except Exception as exc:
+        raise AuthError("No autorizado") from exc
 
 
 AuthDep = Annotated[UserResponse, Depends(get_current_user_dep)]
 
 
 def require_permission(permission: str):
-    def _check(
-        db: SupabaseDep,
-        token: TokenDep,
-    ) -> UserResponse:
-        try:
-            user = get_current_user(db, token)
-        except Exception:
-            raise HTTPException(status_code=401, detail="No autorizado")
+    def _check(user: AuthDep) -> UserResponse:
         if permission not in user.permissions:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Permiso requerido: {permission}",
-            )
+            raise ForbiddenError(f"Permiso requerido: {permission}")
         return user
     return _check

@@ -11,3 +11,12 @@ wheels/
 
 # Secrets
 .env
+
+# Datos sensibles / archivos de negocio
+*.xlsx
+*.xls
+.~lock.*#
+
+# Cache y herramientas
+.pytest_cache/
+.ruff_cache/

@@ -4,22 +4,21 @@ import unicodedata
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
+from app.config import settings
+from app.constants import ALLOWED_MIME_TYPES, MIME_TO_EXTENSION
 from app.dependencies import SupabaseDep, require_permission
+from app.exceptions import ValidationError
 from app.schemas.auth import UserResponse
 from app.schemas.candidato import CandidatoRead
 from app.services.ai_extractor import extract_document_data
+from app.services.crud import TableRepository
 from app.services.supabase_storage import upload_file
 
 router = APIRouter(prefix="/escanear", tags=["Scanner"])
 
-ALLOWED_TYPES = {
-    "application/pdf": ".pdf",
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
-}
-
 TABLE = "candidatos"
+MATCH_PAGE_SIZE = 1000
+MAX_UPLOAD_BYTES = settings.MAX_UPLOAD_MB * 1024 * 1024
 
 
 def normalize_text(text: str) -> str:
@@ -29,43 +28,37 @@ def normalize_text(text: str) -> str:
     return text
 
 
-def extract_first_name(full_name: str) -> str:
-    parts = normalize_text(full_name).split()
-    return parts[0] if parts else ""
+def _matches_candidato(c: dict, primer_nombre: str, primer_apellido: str) -> bool:
+    crudos = c.get("datos_crudos") or {}
+    existing_nombre = crudos.get("primer_nombre", "")
+    existing_apellido = crudos.get("primer_apellido", "")
 
+    if not existing_nombre or not existing_apellido:
+        parts = normalize_text(c.get("nombre", "")).split()
+        existing_nombre = parts[0] if parts else ""
+        if len(parts) == 2:
+            existing_apellido = parts[1]
+        elif len(parts) == 3:
+            existing_apellido = parts[1]
+        elif len(parts) >= 4:
+            existing_apellido = parts[2]
+        else:
+            existing_apellido = ""
 
-def extract_first_last_name(full_name: str) -> str:
-    parts = normalize_text(full_name).split()
-    return parts[-1] if len(parts) > 1 else ""
+    return existing_nombre == primer_nombre and existing_apellido == primer_apellido
 
 
 def find_matching_candidato(
     db: SupabaseDep, primer_nombre: str, primer_apellido: str
 ) -> dict | None:
+    """Busca un candidato por nombre/apellido normalizados, paginando para no
+    depender del límite por defecto de PostgREST (~1000 filas)."""
     if not primer_nombre or not primer_apellido:
         return None
-        
-    result = db.table(TABLE).select("*").execute()
-    for c in result.data:
-        crudos = c.get("datos_crudos") or {}
-        # Primero intentamos sacar los nombres de la extracción previa si existen
-        existing_nombre = crudos.get("primer_nombre", "")
-        existing_apellido = crudos.get("primer_apellido", "")
-        
-        # Si no existían en datos_crudos, intentamos inferirlos del nombre completo
-        if not existing_nombre or not existing_apellido:
-            parts = normalize_text(c.get("nombre", "")).split()
-            existing_nombre = parts[0] if parts else ""
-            if len(parts) == 2:
-                existing_apellido = parts[1]
-            elif len(parts) == 3:
-                existing_apellido = parts[1]
-            elif len(parts) >= 4:
-                existing_apellido = parts[2]
-            else:
-                existing_apellido = ""
-                
-        if existing_nombre == primer_nombre and existing_apellido == primer_apellido:
+
+    repo = TableRepository(db, TABLE)
+    for c in repo.list_all(page_size=MATCH_PAGE_SIZE):
+        if _matches_candidato(c, primer_nombre, primer_apellido):
             return c
     return None
 
@@ -83,6 +76,7 @@ def parse_confianza(val) -> float:
     except Exception:
         return 0.0
 
+
 @router.post("/", response_model=CandidatoRead)
 async def escanear_documento(
     db: SupabaseDep,
@@ -90,25 +84,29 @@ async def escanear_documento(
     user: UserResponse = Depends(require_permission("escanear")),
 ):
     content_type = file.content_type.lower() if file.content_type else ""
-    # Navegadores a veces envían image/jpg en vez de image/jpeg
     if content_type == "image/jpg":
         content_type = "image/jpeg"
-        
-    if content_type not in ALLOWED_TYPES:
+
+    if content_type not in MIME_TO_EXTENSION:
         ext = file.filename.lower().split(".")[-1] if file.filename else "unknown"
         valid_ext = f".{ext}"
-        if valid_ext not in ALLOWED_TYPES.values():
-            raise HTTPException(
-                status_code=422,
-                detail=f"Tipo de archivo no permitido: {file.content_type}. "
-                       "Use PDF, JPG, PNG o WEBP.",
+        if valid_ext not in ALLOWED_MIME_TYPES:
+            raise ValidationError(
+                f"Tipo de archivo no permitido: {file.content_type}. "
+                "Use PDF, JPG, PNG, WEBP o HEIC.",
             )
         suffix = valid_ext
     else:
-        suffix = ALLOWED_TYPES.get(content_type, ".pdf")
+        suffix = MIME_TO_EXTENSION.get(content_type, ".pdf")
+
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Archivo demasiado grande. Máximo {settings.MAX_UPLOAD_MB} MB.",
+        )
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        content = await file.read()
         tmp.write(content)
         tmp_path = tmp.name
 
@@ -121,18 +119,16 @@ async def escanear_documento(
         confianza_val = parse_confianza(extracted_data.get("tipo_confianza"))
 
         if tipo_documento == "CEDULA":
-            file_url = upload_file(tmp_path, folder="cedulas")
-            existing = find_matching_candidato(
-                db, primer_nombre, primer_apellido
-            )
+            file_url = upload_file(db, tmp_path, folder="cedulas")
+            existing = find_matching_candidato(db, primer_nombre, primer_apellido)
             if existing:
                 update_data = {
-                    "cedula": datos.get("cedula"),
-                    "sexo": datos.get("sexo"),
-                    "cedula_url": file_url,
                     "datos_crudos": {
                         **(existing.get("datos_crudos") or {}),
                         "cedula_datos": extracted_data,
+                        "cedula": datos.get("cedula"),
+                        "sexo": datos.get("sexo"),
+                        "cedula_url": file_url,
                     },
                 }
                 result = (
@@ -145,19 +141,17 @@ async def escanear_documento(
             else:
                 candidato_data = {
                     "nombre": datos.get("nombre", "Sin nombre"),
-                    "cedula": datos.get("cedula"),
-                    "sexo": datos.get("sexo"),
-                    "cedula_url": file_url,
-                    "datos_crudos": extracted_data,
+                    "datos_crudos": {
+                        **extracted_data,
+                        "cedula_url": file_url,
+                    },
                 }
                 result = db.table(TABLE).insert(candidato_data).execute()
                 return result.data[0]
 
         else:
-            file_url = upload_file(tmp_path, folder="cvs")
-            existing = find_matching_candidato(
-                db, primer_nombre, primer_apellido
-            )
+            file_url = upload_file(db, tmp_path, folder="cvs")
+            existing = find_matching_candidato(db, primer_nombre, primer_apellido)
             if existing:
                 update_data = {
                     "nombre": datos.get("nombre", existing.get("nombre")),
